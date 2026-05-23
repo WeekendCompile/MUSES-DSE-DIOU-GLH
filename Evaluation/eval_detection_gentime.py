@@ -81,13 +81,17 @@ class ANETdetection(object):
                 continue
  
             for ann in v['annotations']:
-                if ann['label'] not in activity_index:
-                    activity_index[ann['label']] = cidx
-                    cidx += 1
-                video_lst.append(videoid)
-                t_start_lst.append(ann['segment'][0])
-                t_end_lst.append(ann['segment'][1])
-                label_lst.append(activity_index[ann['label']])
+                # MUSES stores labels as a list; THUMOS/EGTEA use a plain string.
+                # Flatten to individual string labels so each can be used as a dict key.
+                ann_labels = ann['label'] if isinstance(ann['label'], list) else [ann['label']]
+                for lbl in ann_labels:
+                    if lbl not in activity_index:
+                        activity_index[lbl] = cidx
+                        cidx += 1
+                    video_lst.append(videoid)
+                    t_start_lst.append(ann['segment'][0])
+                    t_end_lst.append(ann['segment'][1])
+                    label_lst.append(activity_index[lbl])
         
         ground_truth = pd.DataFrame({'video-id': video_lst,
                                      't-start': t_start_lst,
@@ -95,6 +99,7 @@ class ANETdetection(object):
                                      'label': label_lst})
 
         return ground_truth, activity_index, cidx
+
 
     def _import_prediction(self, prediction_filename, cidx):
         """Reads prediction file, checks if it is well formatted, and returns
@@ -249,15 +254,15 @@ def compute_average_precision_detection(ground_truth, prediction, tiou_threshold
     cnt_tp = np.zeros(len(tiou_thresholds))
 
     for tidx in range(len(tiou_thresholds)):
-        # Computing prec-rec
-        this_tp = np.cumsum(tp[tidx,:]).astype(np.float)
-        this_fp = np.cumsum(fp[tidx,:]).astype(np.float)
+        # np.float was removed in NumPy 1.24 — use np.float64 instead
+        this_tp = np.cumsum(tp[tidx,:]).astype(np.float64)
+        this_fp = np.cumsum(fp[tidx,:]).astype(np.float64)
         # print(this_tp, npos)
         rec = this_tp / npos
         prec = this_tp / (this_tp + this_fp)
         # print('###', rec, prec)
         ap[tidx] = interpolated_prec_rec(prec, rec)
-        this_tdiff=np.cumsum(timediff[tidx,:]).astype(np.float)
+        this_tdiff=np.cumsum(timediff[tidx,:]).astype(np.float64)
         if len(this_tdiff)==0:
             continue
         tdiff[tidx]=this_tdiff[-1]#  / max(1,this_tp[-1])
