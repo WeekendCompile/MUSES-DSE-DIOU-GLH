@@ -6,7 +6,7 @@ import torch.nn.parallel
 import torch.nn.functional as F
 import torch.optim as optim
 import numpy as np
-import opts_egtea as opts
+import opts_muses as opts
 import time
 import h5py
 from iou_utils import *
@@ -18,35 +18,37 @@ from loss_func import cls_loss_func, regress_loss_func, suppress_loss_func
 from tqdm import tqdm
 
 def train_one_epoch(opt, model, train_dataset, optimizer):
+    num_workers = min(8, os.cpu_count())
     train_loader = torch.utils.data.DataLoader(train_dataset,
                                                 batch_size=opt['batch_size'], shuffle=True,
-                                                num_workers=0, pin_memory=True,drop_last=False)      
+                                                num_workers=num_workers, pin_memory=True, drop_last=False)
     epoch_cost = 0
-    
+
     for n_iter,(input_data,label) in enumerate(tqdm(train_loader)):
         suppress_conf = model(input_data.cuda())
-        
-        loss = suppress_loss_func(label,suppress_conf)
-        epoch_cost+= loss.detach().cpu().numpy()    
-               
+
+        loss = suppress_loss_func(label, suppress_conf)
+        epoch_cost += loss.detach().cpu().item()
+
         optimizer.zero_grad()
         loss.backward()
-        optimizer.step()   
-                
+        optimizer.step()
+
     return n_iter, epoch_cost
 
 def eval_one_epoch(opt, model, test_dataset):
+    num_workers = min(8, os.cpu_count())
     test_loader = torch.utils.data.DataLoader(test_dataset,
                                                 batch_size=opt['batch_size'], shuffle=False,
-                                                num_workers=0, pin_memory=True,drop_last=False)   
+                                                num_workers=num_workers, pin_memory=True, drop_last=False)
     epoch_cost = 0
-    
+
     for n_iter,(input_data,label) in enumerate(tqdm(test_loader)):
         suppress_conf = model(input_data.cuda())
-        
-        loss = suppress_loss_func(label,suppress_conf)
-        epoch_cost+= loss.detach().cpu().numpy()    
-               
+
+        loss = suppress_loss_func(label, suppress_conf)
+        epoch_cost += loss.detach().cpu().item()
+
     return n_iter, epoch_cost
 
     
@@ -89,9 +91,10 @@ def train(opt):
     return 
 
 def eval_frame(opt, model, dataset):
+    num_workers = min(8, os.cpu_count())
     test_loader = torch.utils.data.DataLoader(dataset,
                                                 batch_size=opt['batch_size'], shuffle=False,
-                                                num_workers=0, pin_memory=True,drop_last=False)
+                                                num_workers=num_workers, pin_memory=True, drop_last=False)
     
     labels_cls={}
     labels_reg={}
@@ -110,23 +113,18 @@ def eval_frame(opt, model, dataset):
     epoch_cost_reg = 0   
     
     for n_iter,(input_data,cls_label,reg_label, _) in enumerate(tqdm(test_loader)):
-        act_cls, act_reg, _ = model(input_data.cuda())
-        
-        cost_reg = 0
-        cost_cls = 0
-        
-        loss = cls_loss_func(cls_label,act_cls)
+        act_cls, act_reg = model(input_data.cuda())
+
+        loss = cls_loss_func(cls_label, act_cls)
         cost_cls = loss
-            
-        epoch_cost_cls+= cost_cls.detach().cpu().numpy()    
-               
-        loss = regress_loss_func(reg_label,act_reg)
-        cost_reg = loss  
-        epoch_cost_reg += cost_reg.detach().cpu().numpy()   
-        
-        cost= opt['alpha']*cost_cls +opt['beta']*cost_reg    
-                
-        epoch_cost += cost.detach().cpu().numpy() 
+        epoch_cost_cls += cost_cls.detach().cpu().item()
+
+        loss = regress_loss_func(reg_label, act_reg)
+        cost_reg = loss
+        epoch_cost_reg += cost_reg.detach().cpu().item()
+
+        cost = opt['alpha']*cost_cls + opt['beta']*cost_reg
+        epoch_cost += cost.detach().cpu().item()
         
         act_cls = torch.softmax(act_cls, dim=-1)
         
@@ -148,9 +146,9 @@ def eval_frame(opt, model, dataset):
         output_cls[video_name]=np.stack(output_cls[video_name], axis=0)
         output_reg[video_name]=np.stack(output_reg[video_name], axis=0)
     
-    cls_loss=epoch_cost_cls/n_iter
-    reg_loss=epoch_cost_reg/n_iter
-    tot_loss=epoch_cost/n_iter
+    cls_loss = epoch_cost_cls/n_iter if n_iter > 0 else 0
+    reg_loss = epoch_cost_reg/n_iter if n_iter > 0 else 0
+    tot_loss = epoch_cost/n_iter if n_iter > 0 else 0
      
     return cls_loss, reg_loss, tot_loss, output_cls, output_reg, labels_cls, labels_reg, working_time, total_frames
 
@@ -166,7 +164,7 @@ def test(opt):
     
     test_loader = torch.utils.data.DataLoader(dataset,
                                                 batch_size=opt['batch_size'], shuffle=False,
-                                                num_workers=0, pin_memory=True,drop_last=False)   
+                                                num_workers=8, pin_memory=True,drop_last=False)   
     labels={}
     output={}                                   
     for video_name in dataset.video_list:
@@ -203,7 +201,9 @@ def make_dataset(opt):
     
     model = MYNET(opt).cuda()
     checkpoint = torch.load(opt["checkpoint_path"]+"/"+opt['exp']+"_ckp_best.pth.tar")
-    base_dict=checkpoint['state_dict']
+    base_dict = checkpoint['state_dict']
+    if any(k.startswith('module.') for k in base_dict.keys()):
+        base_dict = {k.replace('module.', ''): v for k, v in base_dict.items()}
     model.load_state_dict(base_dict)
     model.eval()
     
@@ -300,10 +300,10 @@ if __name__ == '__main__':
     opt_file.close()
     
     if opt['seed'] >= 0:
-        seed = opt['seed'] 
+        seed = opt['seed']
         torch.manual_seed(seed)
         np.random.seed(seed)
-        #random.seed(seed)
+        torch.cuda.manual_seed_all(seed)
           
     opt['anchors'] = [int(item) for item in opt['anchors'].split(',')]  
         
