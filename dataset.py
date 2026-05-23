@@ -246,7 +246,9 @@ class VideoDataSet(data.Dataset):
     def _loadFeaturelen(self, opt):
         if os.path.exists(self.video_len_path):
             self.video_len = load_json(self.video_len_path)
-            return
+            if self.video_len:  # skip empty/stale cache and regenerate
+                return
+            print(f"[Info] Stale/empty cache at {self.video_len_path}, regenerating...")
             
         self.video_len={}
         if self.subset == "train":
@@ -347,8 +349,11 @@ class VideoDataSet(data.Dataset):
                 self.video_dict[video_name] = video_info
             
             for seg in video_info['annotations']:
-                if not seg['label'] in self.label_name:
-                    self.label_name.append(seg['label'])
+                # MUSES labels are lists; THUMOS/EGTEA labels are plain strings.
+                labels = seg['label'] if isinstance(seg['label'], list) else [seg['label']]
+                for lbl in labels:
+                    if lbl not in self.label_name:
+                        self.label_name.append(lbl)
         
         self.label_name.sort()            
         self.video_list = list(self.video_dict.keys())
@@ -366,11 +371,14 @@ class VideoDataSet(data.Dataset):
             second_to_frame = self.video_len[video_name] / float(video_info['duration'])
             for j in range(len(video_labels)):
                 tmp_info = video_labels[j]
+                # MUSES labels are lists; unify to list for uniform handling.
+                labels = tmp_info['label'] if isinstance(tmp_info['label'], list) else [tmp_info['label']]
                 tmp_start = tmp_info['segment'][0] * second_to_frame
-                tmp_end = tmp_info['segment'][1] * second_to_frame
-                tmp_label = self.label_name.index(tmp_info['label'])
-                gt_bbox.append([tmp_start, tmp_end, tmp_label])
-                gt_edlen.append([gt_bbox[-1][1], gt_bbox[-1][1] - gt_bbox[-1][0], tmp_label])
+                tmp_end   = tmp_info['segment'][1] * second_to_frame
+                for lbl in labels:
+                    tmp_label = self.label_name.index(lbl)
+                    gt_bbox.append([tmp_start, tmp_end, tmp_label])
+                    gt_edlen.append([tmp_end, tmp_end - tmp_start, tmp_label])
             
             gt_bbox = np.array(gt_bbox)
             gt_edlen = np.array(gt_edlen)
